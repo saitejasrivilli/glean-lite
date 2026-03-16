@@ -1,0 +1,17 @@
+name: Reindex on push
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # allow manual trigger from GitHub UI
+
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger glean-lite indexing
+        run: |
+          curl -f -X POST \
+            -H "Content-Type: application/json" \
+            "${{ secrets.GLEAN_LITE_URL }}/api/index"
+        # Add GLEAN_LITE_URL = https://your-app.fly.dev in repo Settings → Secrets

@@ -1,0 +1,15 @@
+.env
+.env.local
+*.env
+
+# Go
+/glean-lite
+*.exe
+
+# Node
+ui/node_modules/
+ui/.next/
+ui/out/
+
+# Misc
+.DS_Store
