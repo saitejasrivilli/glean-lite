@@ -15,10 +15,12 @@ import (
 
 const apiBase = "https://api.github.com"
 
-// Connector fetches files from one or more GitHub repositories.
+// minBodyBytes — skip files shorter than this (config files, lock files, etc.)
+const minBodyBytes = 200
+
 type Connector struct {
 	token string
-	repos []string // e.g. ["yourname/glean-lite", "yourname/other-repo"]
+	repos []string
 }
 
 func New() *Connector {
@@ -52,6 +54,7 @@ type treeResponse struct {
 		Path string `json:"path"`
 		Type string `json:"type"`
 		URL  string `json:"url"`
+		Size int    `json:"size"`
 	} `json:"tree"`
 }
 
@@ -72,12 +75,20 @@ func (c *Connector) fetchTree(ctx context.Context, repo string) ([]connector.Doc
 		if item.Type != "blob" {
 			continue
 		}
-		if !isTextFile(item.Path) {
+		if !isIndexableFile(item.Path) {
+			continue
+		}
+		// skip tiny files (lock files, single-line configs)
+		if item.Size < minBodyBytes {
 			continue
 		}
 		content, err := c.fetchBlob(ctx, item.URL)
 		if err != nil {
-			continue // skip unreadable blobs
+			continue
+		}
+		// double-check body length after decode
+		if len(strings.TrimSpace(content)) < minBodyBytes {
+			continue
 		}
 		docs = append(docs, connector.Document{
 			ID:    fmt.Sprintf("github:%s:%s", repo, item.Path),
@@ -111,7 +122,6 @@ func (c *Connector) fetchBlob(ctx context.Context, url string) (string, error) {
 	if blob.Encoding != "base64" {
 		return blob.Content, nil
 	}
-	// GitHub base64 has newlines — strip them
 	clean := strings.ReplaceAll(blob.Content, "\n", "")
 	decoded, err := base64.StdEncoding.DecodeString(clean)
 	if err != nil {
@@ -129,34 +139,53 @@ func (c *Connector) get(ctx context.Context, url string) ([]byte, error) {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
-
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("github API %s: %s", url, resp.Status)
 	}
 	return io.ReadAll(resp.Body)
 }
 
-// isTextFile returns true for file types worth indexing.
-func isTextFile(path string) bool {
-	skipPrefixes := []string{"vendor/", "node_modules/", ".git/"}
+// isIndexableFile — only meaningful code and docs, no config noise
+func isIndexableFile(path string) bool {
+	skipPrefixes := []string{
+		"vendor/", "node_modules/", ".git/",
+		"__pycache__/", ".pytest_cache/", "dist/", "build/",
+	}
 	for _, p := range skipPrefixes {
 		if strings.HasPrefix(path, p) {
 			return false
 		}
 	}
-	textExts := []string{
-		".go", ".ts", ".tsx", ".js", ".jsx", ".py", ".rs",
-		".md", ".txt", ".yaml", ".yml", ".json", ".toml",
-		".sh", ".sql", ".html", ".css",
+
+	// skip common noise files by name
+	base := path
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		base = path[idx+1:]
+	}
+	noiseFiles := []string{
+		"package-lock.json", "yarn.lock", "poetry.lock",
+		"go.sum", "Pipfile.lock", ".DS_Store",
+		"adapter_config.json", // LoRA adapter configs — pure numbers, no signal
+	}
+	for _, n := range noiseFiles {
+		if strings.EqualFold(base, n) {
+			return false
+		}
+	}
+
+	// only these extensions — prioritise code + docs
+	goodExts := []string{
+		".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".rs",
+		".md", ".sh", ".sql", ".yaml", ".yml", ".toml",
+		".html", ".css", ".txt",
 	}
 	lower := strings.ToLower(path)
-	for _, ext := range textExts {
+	for _, ext := range goodExts {
 		if strings.HasSuffix(lower, ext) {
 			return true
 		}

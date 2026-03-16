@@ -13,7 +13,6 @@ import (
 )
 
 func main() {
-	// Load .env in development
 	_ = godotenv.Load()
 
 	port := os.Getenv("PORT")
@@ -35,10 +34,10 @@ func main() {
 		AllowedHeaders: []string{"Content-Type"},
 	}))
 
-	r.Post("/api/search", engine.HandleSearch)
-	r.Post("/api/index", engine.HandleIndex)
+	r.Mount("/api", engine.Router())
+
 	r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
